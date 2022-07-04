@@ -3,11 +3,13 @@
 
 from time import time_ns
 from xml.etree import ElementTree as ET
-from xml.etree.ElementTree import Element
-from pathlib import Path
-from requests_html import HTMLResponse, HTMLSession, _Find as Find
-import rtoml as toml
-import keyboard
+from xml.etree.ElementTree import Element  # for type hints
+from pathlib import Path  # for type casting
+
+
+from requests_html import HTMLResponse, HTMLSession
+import rtoml as toml  # for handling config files
+import keyboard  # for handling user input
 from tendo.singleton import SingleInstance
 
 # handling config file
@@ -25,6 +27,7 @@ def create_config(file_name: str) -> None:
         "jump_point": "Region Name of jump point, e.g. Artificial Solar System",
         # end prepping and general stuff
         "pointing": False,
+        "detagging": False,
         "flag": "flag.png",
         "flag_mode": "must be logo or flag",
         "banner": "banner.png",
@@ -44,7 +47,7 @@ def create_config(file_name: str) -> None:
 # setting globals now
 
 # set version
-VERSION: str = "1.0.0"
+VERSION: str = "1.2.0"
 
 # load config
 try:
@@ -92,7 +95,7 @@ def make_request(
                 break
 
         # waiting for input so it's a human initiated request and can both do
-        # restricted actions and not be bound by the html ratelimit
+        # restricted actions and not be bound by the html ratelimit;
         # waiting for key bind to be released so the user can't hold it down and spam requests
     else:
         payload["v"] = "11"
@@ -116,8 +119,11 @@ def login(nation: str, password: str) -> tuple[str, str, str]:
         "password": password,
     }
 
-    url: str = "https://dark.nationstates.net/region=rwby"
+    url: str = "https://century.nationstates.net/region=rwby"
     # shoutouts to the relendo snippet that gave me the idea of using a region page to get both chk and localid
+    # reasoning behind using century is that you can't point a login form at a template-none region page
+    # and century is barely the smallest theme on the site, only about 5KB bigger than the template-none equivalent
+    # and .3 KB smaller than century, and 8KB smaller than dark and rift
     response: HTMLResponse = make_request(
         url, data, f"Press enter to login to {nation}"
     )
@@ -126,12 +132,8 @@ def login(nation: str, password: str) -> tuple[str, str, str]:
     local_id: str = response.html.find("input[name=localid]")[0].attrs["value"]
 
     # get current region for sake of deciding whether to move to JP or not
-    panel_region_bar: Find = response.html.find("#panelregionbar")[0]
-    current_region: str = (
-        panel_region_bar.find(".paneltext")[0].text.lower().split("\n")[0]
-    )
-    # not super proud of that line but it works
-
+    current_region: str = response.html.find(".STANDOUT")[1].text.lower().strip()
+    # [1] is the region name, [0] is the nation name which i already have
     return chk, local_id, current_region
 
 
@@ -148,7 +150,7 @@ def prep(nation: str, password: str) -> None:
         print(f"Failed to login to {nation}. Are you sure you have the right password?")
         return
     apply_to_wa(chk)
-    if current_region != config["jump_point"].lower():
+    if current_region != config["jump_point"].lower().strip():
         move_to_region(config["jump_point"], local_id)
 
 
@@ -207,6 +209,71 @@ def tag(nation: str, password: str) -> None:
     tag_region(chk, region, permissions, embassies)
 
 
+def detag(nation: str, password: str) -> None:
+    try:
+        chk, region, permissions, embassies = get_perms(nation, password)
+    except Exception:
+        print(
+            f"{nation} is not an RO, does not exist, or has an incorrect password. Skipping..."
+        )
+        return
+    detag_region(chk, region, permissions, config["embassies"], embassies)
+
+
+def detag_region(
+    chk: str,
+    region: str,
+    permissions: dict,
+    embassies_to_close: list,
+    region_embassies: list,
+) -> None:
+    """Detags a region from a RO
+
+    Args:
+        chk (str): CHK of the RO
+        region (str): Region to detag
+        permissions (dict): Permissions of the RO
+        embassies (list): Embassies of the RO
+    """
+    if "Appearance" in permissions:
+        wfe = get_native_wfe(region)
+        change_wfe(chk, region, wfe)
+        abolish_flag(chk, region)
+    if "Embassies" in permissions:
+        for embassy in embassies_to_close:
+            if embassy in region_embassies:
+                close_embassy(chk, region, embassy)
+
+
+def abolish_flag(chk: str, region: str) -> None:
+    """Abolishes a flag from a RO
+
+    Args:
+        chk (str): CHK of the RO
+        region (str): Region to abolish the flag from
+    """
+    data: dict[str, str] = {
+        "page": "region_control",
+        "chk": chk,
+        "region": region,
+        "newflag": "none",
+        "newbanner": "r1",
+        "saveflagandbannerchanges": "1",
+        "flagmode": config["flag_mode"],
+    }
+
+    url: str = "https://www.nationstates.net/template-overall=none/page=region_control"
+
+    response: HTMLResponse = make_request(
+        url, data, f"Press enter to abolish the flag of {region}"
+    )
+
+    if "updated!" in response.text:
+        print(f"Successfully abolished the flag of {region}")
+    else:
+        print(f"Failed to abolish the flag of {region}")
+
+
 def tag_region(chk: str, region: str, permissions: list, embassies: list) -> None:
     """Tags a region with the specified permissions and embassies
 
@@ -261,7 +328,7 @@ def close_embassy(chk: str, region: str, embassy: str) -> None:
         region (str): Region you are tagging
         embassy (str): Embassy to close
     """
-    if embassy in config["embassies"]:
+    if embassy in config["embassies"] and not config["detagging"]:
         cancel_embassy_closure(chk, region, embassy)
         return
 
@@ -324,7 +391,7 @@ def get_embassy_requests(region: str) -> list:
     }
     url: str = "https://www.nationstates.net/cgi-bin/api.cgi"
 
-    response: HTMLResponse = make_request(url, data, f"Getting embassies from {region}")
+    response: HTMLResponse = make_request(url, data)
 
     root: Element = ET.fromstring(response.text)
     embassies_element: list[Element] = root.findall(".//EMBASSY[@type='invited']")
@@ -341,10 +408,10 @@ def change_wfe(chk: str, region: str, wfe: str) -> None:
         wfe (str): WFE to change to
     """
     data: dict[str, str] = {
-        "page": "region_control",
+        "encoding" "page": "region_control",
         "chk": chk,
         "region": region,
-        "message": wfe,
+        "message": wfe.encode("iso-8859-1"),
         "setwfebutton": "1",
     }
     url: str = "https://www.nationstates.net/template-overall=none/page=region_control"
@@ -357,6 +424,22 @@ def change_wfe(chk: str, region: str, wfe: str) -> None:
         print("Successfully changed WFE")
     else:
         print("Failed to change WFE")
+
+
+def get_native_wfe(region: str) -> str:
+    """Gets the oldest WFE from Haku's WFE archive at https://greywardens.xyz/tools/wfe_index
+
+    Args:
+        region (str): Region you want the WFE of
+
+    Returns:
+        str: Oldest WFE of said region
+    """
+    url: str = f"https://greywardens.xyz/tools/wfe_index/region={region}?api.cgi"
+
+    response: HTMLResponse = make_request(url, {})
+
+    return response.html.find("pre")[-1].text
 
 
 def change_flag_and_banner(chk: str, region: str, flag: str, banner: str) -> None:
@@ -457,7 +540,7 @@ def get_perms(nation: str, password: str) -> tuple[str, str, list, list]:
     try:
         chk: str = response.html.find("input[name=chk]")[0].attrs["value"]
         region: str = response.html.find(".dull")[0].text
-        ro_block: Find = response.html.find(".minorinfo")[0]
+        ro_block = response.html.find(".minorinfo")[0]
         permissions: list = [perm.text for perm in ro_block.find(".operm")]
         embassies: list = [emb.text for emb in response.html.find(".rlink")]
         return chk, region, permissions, embassies
@@ -467,7 +550,11 @@ def get_perms(nation: str, password: str) -> tuple[str, str, list, list]:
 
 def tag_and_prep(nations: dict) -> None:
     for nation, password in nations.items():
-        tag(nation, password)
+        if config["pointing"]:
+            if config["detagging"]:
+                detag(nation, password)
+            else:
+                tag(nation, password)
         prep(nation, password)
 
 
@@ -494,12 +581,20 @@ def accept_embassy(chk: str, embassy: str, embassy_hub: str) -> None:
 def accept_embassies():
     embassy_hub: str = input("Enter embassy hub: ")
     embassies: list = get_embassy_requests(embassy_hub)
-    chk: str = login(*config["ro_for_jump_point"])[0]
+    chk, _, _ = login(*config["ro_for_jump_point"])
     for embassy in embassies:
         accept_embassy(chk, embassy, embassy_hub)
 
 
 def check_if_nation_exists(nation: str) -> bool:
+    """Given a nation, checks if it exists.
+
+    Args:
+        nation (str): Nation to check
+
+    Returns:
+        bool: True if nation exists, False if not
+    """
     data: dict[str, str] = {"nation": nation, "q": "lastlogin"}
     url: str = "https://www.nationstates.net/cgi-bin/api.cgi"
 
@@ -525,7 +620,7 @@ def main() -> None:
         )
         return
 
-    nations: dict = config["nations"]
+    nations: dict[str, str] = config["nations"]
 
     option_selection: str = (
         "Type 1 to tag and/or prep or 2 to accept embassies on an embassy hub: "

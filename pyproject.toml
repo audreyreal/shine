@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "shine"
-version = "1.0.0"
+version = "1.2.0"
 description = "a tool for helping you do tags and prep on nationstates.net more efficiently"
 authors = ["sweeze <sw33ze@protonmail.com>"]
 
