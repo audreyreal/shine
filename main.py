@@ -40,12 +40,13 @@ def handle_config() -> dict:
             "wfe": "wfe\n",
             "ro_for_jump_point": ("Nation", "Password"),
             # doubles as embassies to close when detagging
-            "embassies": {
+            "embassies": [
                 "Plum Island",
-            },
+            ],
             "nations": {f"nation {i}": "password" for i in range(1, 6)},
         }
-        rtoml.dump(template, open("config.toml", "w"))
+        with open("config.toml", "w") as f:
+            rtoml.dump(template, f)
         print(
             "No config file found, created one. Please edit it and run the script again."
         )
