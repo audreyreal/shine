@@ -13,13 +13,14 @@
 import logging
 import os
 import rtoml
-from nsdotpy.session import NSSession
+from nsdotpy.session import NSSession, canonicalize
 
 
 def handle_config() -> dict:
     if os.path.exists("config.toml"):
         # load config file
-        config = rtoml.load(open("config.toml", "r"))
+        with open("config.toml", "r") as f:
+            config = rtoml.load(f)
         if config["main_nation"] == "Your Main Nation Here":
             print("Please actually fill in config file and run the script again.")
             exit()
@@ -40,9 +41,9 @@ def handle_config() -> dict:
             "wfe": "wfe\n",
             "ro_for_jump_point": ("Nation", "Password"),
             # doubles as embassies to close when detagging
-            "embassies": [
+            "embassies": (
                 "Plum Island",
-            ],
+            ),
             "nations": {f"nation {i}": "password" for i in range(1, 6)},
         }
         with open("config.toml", "w") as f:
@@ -78,16 +79,16 @@ def main():
     embassies: set = set(config["embassies"])
     nations: dict[str, str] = config["nations"]
 
-    logger = logging.getLogger("shine")
     session = NSSession(
         "Shine",
-        "3.0.0",
+        "3.0.1",
         "Sweeze",
         config["main_nation"],
         config["keybind"],
-        "github.com/sw33ze/shine",
-        logger,
+        "github.com/sw33ze/shine"
     )
+
+    nations = order_nations(nations)
 
     for nation, password in nations.items():
         if session.login(nation, password):
@@ -95,20 +96,40 @@ def main():
                 if detagging:
                     detag(session, embassies)
                 else:
-                    tag(jp, flag, flag_mode, banner, wfe, session)
+                    tag(flag, flag_mode, banner, wfe, session, embassies)
                 # end pointing
             if applying:
                 session.apply_wa()
-            session.move_to_region(jp)
+            if session.region != canonicalize(jp):
+                session.move_to_region(jp)
+
+def order_nations(nations: dict[str, str]) -> dict[str, str]:
+    if start_of_nations := input(
+        "If you don't want to start at the start of nations, type the new nation you want to start with. Otherwise, press enter."
+    ):
+        if canonicalize(start_of_nations) not in canonicalize(nations):
+            print("That nation is not in the list of nations. Using default order.")
+            return nations
+        before_new_start = {}
+        for nation, password in list(nations.items()):
+            if canonicalize(nation) != canonicalize(start_of_nations):
+                before_new_start |= {nation: password}
+                nations.pop(nation)
+            else:
+                nations |= before_new_start
+                break
+    return nations
 
 
-def tag(jp, flag, flag_mode, banner, wfe, session):
+def tag(flag, flag_mode, banner, wfe, session: NSSession, embassies):
     session.change_wfe(wfe)
     flag_id = session.upload_to_region("flag", flag)
     banner_id = session.upload_to_region("banner", banner)
     session.set_flag_and_banner(flag_id, banner_id, flag_mode)
-    if not session.request_embassy(jp):
-        session.cancel_embassy(jp)
+    for embassy in embassies:
+        if not session.open_embassy(embassy):
+            session.cancel_embassy(embassy)
+
 
 
 if __name__ == "__main__":
