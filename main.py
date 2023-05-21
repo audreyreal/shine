@@ -127,7 +127,7 @@ def tag(flag, flag_mode, banner, wfe, session: NSSession, embassies):
     banner_id = session.upload_to_region("banner", banner)
     session.set_flag_and_banner(flag_id, banner_id, flag_mode)
     for embassy in embassies:
-        if not session.open_embassy(embassy):
+        if not session.request_embassy(embassy):
             session.cancel_embassy(embassy)
 
 
